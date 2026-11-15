@@ -14,9 +14,21 @@ public struct GrammarProvider: LanguageToolingProvider {
         ])
 
     public init() {}
-    public func makeToolingSession() -> any LanguageToolingSession {
+    public func makeAuthoringSession() -> GrammarProviderSession {
         GrammarProviderSession()
     }
+
+    public func makeToolingSession() -> any LanguageToolingSession {
+        makeAuthoringSession()
+    }
+}
+
+public struct GrammarAuthoringUpdate: Sendable {
+    public let analysis: LanguageProviderAnalysis
+    /// The last accepted source, including when this candidate was rejected.
+    public let activeSource: SourceSnapshot?
+    public let activated: Bool
+    public let impact: GrammarChangeSet?
 }
 
 public actor GrammarProviderSession: LanguageToolingSession {
@@ -24,6 +36,8 @@ public actor GrammarProviderSession: LanguageToolingSession {
     private var text: String?
     private var revision: SourceRevision?
     private var elements: [GrammarLexicalElement] = []
+    private var activeGrammar: Grammar?
+    private var activeSource: SourceSnapshot?
 
     public init() {
         do {
@@ -37,6 +51,23 @@ public actor GrammarProviderSession: LanguageToolingSession {
 
     public func analyze(_ snapshot: SourceSnapshot, change: SourceChange?) async throws
         -> LanguageProviderAnalysis {
+        try analyzeCandidate(snapshot, change: change, activating: false).analysis
+    }
+
+    public func submit(_ snapshot: SourceSnapshot, change: SourceChange? = nil) throws
+        -> GrammarAuthoringUpdate {
+        if let revision, snapshot.revision <= revision {
+            throw SourceEditError.nonIncreasingRevision(base: revision, proposed: snapshot.revision)
+        }
+        if let change, (change.before.revision != revision || change.before.text != text) {
+            throw LanguageProviderError.inconsistentChange
+        }
+        return try analyzeCandidate(snapshot, change: change, activating: true)
+    }
+
+    private func analyzeCandidate(
+        _ snapshot: SourceSnapshot, change: SourceChange?, activating: Bool
+    ) throws -> GrammarAuthoringUpdate {
         if let change, change.after != snapshot {
             throw LanguageProviderError.inconsistentChange
         }
@@ -47,7 +78,7 @@ public actor GrammarProviderSession: LanguageToolingSession {
 
         let parser = GrammarParser(
             grammar: snapshot.text, reportsDiagnostics: false)
-        _ = parser.parse()
+        let syntax = parser.parse()
         let diagnosticRanges = parser.diagnostics.map { diagnostic in
             let nsRange = NSRange(diagnostic.token.range, in: snapshot.text)
             let range = nsRange.location == NSNotFound
@@ -65,11 +96,42 @@ public actor GrammarProviderSession: LanguageToolingSession {
                 severity: .error, message: $0.message,
                 range: SourceRange($0.range.lowerBound, $0.range.upperBound))
         }
+        var validationDiagnostics: [LanguageProviderDiagnostic] = []
+        var activated = false
+        var impact: GrammarChangeSet?
+        if activating, lexicalDiagnostics.isEmpty, parserDiagnostics.isEmpty {
+            let converted = StandardNotation().rewriteToStandardNotation(syntax: syntax)
+            var candidate = Grammar(productions: converted.0,
+                                    start: NonTerminal(name: converted.start),
+                                    lexicalTokens: converted.lexical)
+            candidate.lexicalSpecification = parser.lexicalSpecification
+            let undefined = candidate.undefinedNonterminals.map(\.name).sorted()
+            if !candidate.productions.contains(where: { $0.goal == candidate.start }) {
+                validationDiagnostics.append(.init(
+                    severity: .error, message: "The start symbol has no production.", range: .zero))
+            }
+            for name in undefined {
+                validationDiagnostics.append(.init(
+                    severity: .error, message: "Undefined nonterminal: \(name)", range: .zero))
+            }
+            do {
+                _ = try GrammarDrivenLexer(specification: candidate.lexicalSpecification)
+            } catch {
+                validationDiagnostics.append(.init(
+                    severity: .error, message: "Invalid lexical rules: \(error)", range: .zero))
+            }
+            if validationDiagnostics.isEmpty {
+                impact = activeGrammar?.changeSet(to: candidate)
+                activeGrammar = candidate
+                activeSource = snapshot
+                activated = true
+            }
+        }
         let metrics = lexed.metrics
-        return LanguageProviderAnalysis(
+        let analysis = LanguageProviderAnalysis(
             languageID: "grammar", revision: snapshot.revision,
             tokens: Self.providerTokens(lexed.output.elements),
-            diagnostics: lexicalDiagnostics + parserDiagnostics,
+            diagnostics: lexicalDiagnostics + parserDiagnostics + validationDiagnostics,
             recoveryEdits: diagnosticRanges.compactMap { _, range in
                 guard let token = lexed.output.tokens.first(where: {
                     $0.range.lowerBound == range.location
@@ -95,6 +157,8 @@ public actor GrammarProviderSession: LanguageToolingSession {
                         rebuilt: Self.productionCount(in: lexed.output.elements),
                         strategy: "GrammarParser-panic-recovery")]))
             ])
+        return .init(analysis: analysis, activeSource: activeSource,
+                     activated: activated, impact: impact)
     }
 
     public func semanticTokens() async throws -> ToolingSemanticTokensResult {
