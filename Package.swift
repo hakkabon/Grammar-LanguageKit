@@ -6,10 +6,10 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [.library(name: "GrammarLanguage", targets: ["GrammarLanguage"])],
     dependencies: [
-        .package(path: "../Grammar"),
-        .package(path: "../Lexer"),
-        .package(path: "../Incremental-Parsing"),
-        .package(path: "../Language-Tooling"),
+        .package(url: "https://github.com/hakkabon/Grammar.git", .upToNextMinor(from: "0.9.1")),
+        .package(url: "https://github.com/hakkabon/Lexer.git", .upToNextMinor(from: "0.9.1")),
+        .package(url: "https://github.com/hakkabon/Incremental-Parsing.git", .upToNextMinor(from: "0.33.0")),
+        .package(url: "https://github.com/hakkabon/Language-Tooling.git", .upToNextMinor(from: "0.10.1")),
     ],
     targets: [
         .target(name: "GrammarLanguage", dependencies: [
