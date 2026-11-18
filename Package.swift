@@ -3,17 +3,19 @@ import PackageDescription
 
 let package = Package(
     name: "Grammar-LanguageKit",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v13), .iOS(.v14)],
     products: [.library(name: "GrammarLanguage", targets: ["GrammarLanguage"])],
     dependencies: [
+        .package(url: "https://github.com/hakkabon/LR-Parsing.git", .upToNextMinor(from: "0.8.1")),
         .package(url: "https://github.com/hakkabon/Grammar.git", .upToNextMinor(from: "0.9.1")),
         .package(url: "https://github.com/hakkabon/Lexer.git", .upToNextMinor(from: "0.9.1")),
         .package(url: "https://github.com/hakkabon/Incremental-Parsing.git", .upToNextMinor(from: "0.33.0")),
-        .package(url: "https://github.com/hakkabon/Language-Tooling.git", .upToNextMinor(from: "0.10.1")),
+        .package(url: "https://github.com/hakkabon/Language-Tooling.git", .upToNextMinor(from: "0.10.2")),
     ],
     targets: [
         .target(name: "GrammarLanguage", dependencies: [
             .product(name: "Grammar", package: "Grammar"),
+            .product(name: "LR-Parsing", package: "LR-Parsing"),
             .product(name: "Lexer", package: "Lexer"),
             .product(name: "IncrementalParsing", package: "Incremental-Parsing"),
             .product(name: "LanguageTooling", package: "Language-Tooling"),

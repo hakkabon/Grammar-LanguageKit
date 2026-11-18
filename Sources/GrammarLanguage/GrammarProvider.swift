@@ -65,6 +65,25 @@ public actor GrammarProviderSession: LanguageToolingSession {
         return try analyzeCandidate(snapshot, change: change, activating: true)
     }
 
+    /// Checks accepted and rejected examples with the native LALR runtime,
+    /// with recovery disabled so repairs cannot conceal a regression.
+    public func checkExamples(_ snapshot: SourceSnapshot, corpus: GrammarExampleCorpus) throws
+        -> GrammarExampleReport {
+        try corpus.validate()
+        guard snapshot.text.utf16.count <= 65_536 else {
+            throw GrammarExampleCorpus.Failure("Grammar authoring is limited to 65,536 UTF-16 units.")
+        }
+        let update = try submit(snapshot)
+        guard update.activated, let grammar = activeGrammar else {
+            return .init(revision: snapshot.revision.rawValue, grammarValid: false,
+                         diagnostics: update.analysis.diagnostics, affectedRules: [], examples: [])
+        }
+        return .init(revision: snapshot.revision.rawValue, grammarValid: true,
+                     diagnostics: update.analysis.diagnostics,
+                     affectedRules: update.impact?.affectedNonterminalNames ?? [],
+                     examples: try GrammarExampleEvaluator.evaluate(corpus.examples, grammar: grammar))
+    }
+
     private func analyzeCandidate(
         _ snapshot: SourceSnapshot, change: SourceChange?, activating: Bool
     ) throws -> GrammarAuthoringUpdate {
@@ -111,8 +130,12 @@ public actor GrammarProviderSession: LanguageToolingSession {
                     severity: .error, message: "The start symbol has no production.", range: .zero))
             }
             for name in undefined {
+                let token = lexed.output.tokens.first {
+                    $0.lexeme == name || $0.lexeme == "<\(name)>"
+                }
+                let range = token.map { SourceRange($0.range.lowerBound, $0.range.upperBound) } ?? .zero
                 validationDiagnostics.append(.init(
-                    severity: .error, message: "Undefined nonterminal: \(name)", range: .zero))
+                    severity: .error, message: "Undefined nonterminal: \(name)", range: range))
             }
             do {
                 _ = try GrammarDrivenLexer(specification: candidate.lexicalSpecification)
